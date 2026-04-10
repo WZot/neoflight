@@ -398,6 +398,36 @@ let _elScoreDisplay = null, _elSignalFill = null, _elMinimapCanvas = null;
 let minimapBgCanvas = null;
 let _elHeavenOverlay = null;
 
+// Extended DOM element cache (perf: looked up at init, reused every frame)
+let _elLandingStatus = null, _elScanBtn = null;
+let _elHeatRow = null, _elHeatFill = null;
+let _elHackRow = null, _elHackFill = null, _elHackMarker = null, _elHackSafeZone = null, _elHackSyncBtn = null;
+let _elThreatStatus = null, _elHeavenStatus = null;
+let _elNvgBtn = null, _elLightBtn = null, _elMuteBtn = null, _elTurboBtn = null;
+let _elRthBtn = null, _elLandBtn = null, _elSacBtn = null, _elRthStatus = null;
+let _elWindBtn = null, _elSignalStatic = null, _elHealthFill = null;
+let _elCrashFlash = null, _elNvgOverlay = null, _elScanlines = null;
+
+// Performance: single timestamp cached at the top of each frame
+let _frameNow = 0;
+
+// Performance: dirty-flag shadow values to skip redundant per-frame UI writes
+let _prevRadarPingActive = false;
+let _prevThreatTagTimer = -1;
+let _prevHeavenVisible = false;
+let _prevHeat = -1;
+let _prevOptHeatMechanic = false;
+let _lastDisplayedScore = -1;
+
+// Performance: reusable scratch Three.js objects (eliminate per-frame heap allocations)
+const _scratchV3a = new THREE.Vector3();
+const _scratchV3b = new THREE.Vector3();
+const _scratchV3c = new THREE.Vector3();
+const _scratchQ1 = new THREE.Quaternion();
+const _scratchQ2 = new THREE.Quaternion();
+const _scratchQ3 = new THREE.Quaternion();
+const _scratchQ4 = new THREE.Quaternion();
+
 // Easter egg: dream-like heaven above the clouds
 const HEAVEN_ENTER_ALT = 620;
 const HEAVEN_EXIT_ALT = 540;
@@ -1502,27 +1532,18 @@ function createHighriseTower(x, z, height, blockSize) {
 
 /** Applies active/inactive CSS classes to all HUD toggle buttons to reflect current game state. */
 function updateHUDStyles() {
-    const btnNvg = document.getElementById('nvg-btn');
-    const btnLight = document.getElementById('light-btn');
-    const btnMute = document.getElementById('mute-btn');
-    const btnTurbo = document.getElementById('turbo-btn');
-    const btnRth = document.getElementById('rth-btn');
-    const btnLand = document.getElementById('land-btn');
-    const btnSac = document.getElementById('sacrifice-life-btn');
-
-    if (btnNvg) btnNvg.className = isNVG ? "btn-active-green px-2.5 py-2 text-[9px] font-bold uppercase rounded-sm" : "btn-inactive px-2.5 py-2 text-[9px] font-bold uppercase rounded-sm";
-    if (btnLight) btnLight.className = isLight ? "btn-active-yellow px-2.5 py-2 text-[9px] font-bold uppercase rounded-sm" : "btn-inactive px-2.5 py-2 text-[9px] font-bold uppercase rounded-sm";
-    if (btnMute) btnMute.className = isMuted ? "btn-active-red px-2.5 py-2 text-[9px] font-bold uppercase rounded-sm" : "btn-inactive px-2.5 py-2 text-[9px] font-bold uppercase rounded-sm";
-    if (btnTurbo) btnTurbo.className = isTurbo ? "btn-active-blue px-2.5 py-2 text-[9px] font-bold uppercase rounded-sm" : "btn-inactive px-2.5 py-2 text-[9px] font-bold uppercase rounded-sm";
-    if (btnRth) btnRth.className = isRTH ? "btn-active-blue px-2.5 py-2 text-[9px] font-bold uppercase rounded-sm" : "btn-inactive px-2.5 py-2 text-[9px] font-bold uppercase rounded-sm";
-    if (btnLand) btnLand.className = isAutoLanding ? "btn-active-yellow px-2.5 py-2 text-[9px] font-bold uppercase rounded-sm" : "btn-inactive px-2.5 py-2 text-[9px] font-bold uppercase rounded-sm";
-    if (btnSac) {
-        btnSac.className = awaitingLifeSacrifice
+    if (_elNvgBtn) _elNvgBtn.className = isNVG ? "btn-active-green px-2.5 py-2 text-[9px] font-bold uppercase rounded-sm" : "btn-inactive px-2.5 py-2 text-[9px] font-bold uppercase rounded-sm";
+    if (_elLightBtn) _elLightBtn.className = isLight ? "btn-active-yellow px-2.5 py-2 text-[9px] font-bold uppercase rounded-sm" : "btn-inactive px-2.5 py-2 text-[9px] font-bold uppercase rounded-sm";
+    if (_elMuteBtn) _elMuteBtn.className = isMuted ? "btn-active-red px-2.5 py-2 text-[9px] font-bold uppercase rounded-sm" : "btn-inactive px-2.5 py-2 text-[9px] font-bold uppercase rounded-sm";
+    if (_elTurboBtn) _elTurboBtn.className = isTurbo ? "btn-active-blue px-2.5 py-2 text-[9px] font-bold uppercase rounded-sm" : "btn-inactive px-2.5 py-2 text-[9px] font-bold uppercase rounded-sm";
+    if (_elRthBtn) _elRthBtn.className = isRTH ? "btn-active-blue px-2.5 py-2 text-[9px] font-bold uppercase rounded-sm" : "btn-inactive px-2.5 py-2 text-[9px] font-bold uppercase rounded-sm";
+    if (_elLandBtn) _elLandBtn.className = isAutoLanding ? "btn-active-yellow px-2.5 py-2 text-[9px] font-bold uppercase rounded-sm" : "btn-inactive px-2.5 py-2 text-[9px] font-bold uppercase rounded-sm";
+    if (_elSacBtn) {
+        _elSacBtn.className = awaitingLifeSacrifice
             ? "px-2.5 py-2 btn-active-red text-[9px] font-bold uppercase rounded-sm transition-all"
             : "hidden px-2.5 py-2 btn-active-red text-[9px] font-bold uppercase rounded-sm transition-all";
     }
-    
-    document.getElementById('rth-status').classList.toggle('hidden', !isRTH);
+    if (_elRthStatus) _elRthStatus.classList.toggle('hidden', !isRTH);
 }
 
 /** Constructs all Three.js objects for the hidden "Heaven" easter egg zone (clouds, halos, arches, lounge isles, etc.). */
@@ -1931,7 +1952,7 @@ function updateHeavenEasterEgg(delta) {
                 heavenLoungeGroup.position.z = heavenLoungeAnchor.z;
             }
 
-            const t = Date.now() * 0.001;
+            const t = _frameNow * 0.001;
             for (let i = 0; i < heavenClouds.length; i++) {
                 const c = heavenClouds[i];
                 c.material.opacity = (0.18 + 0.36 * heavenBlend) * (0.82 + 0.18 * Math.sin(t * 0.35 + i * 0.9));
@@ -2123,7 +2144,7 @@ function updateRegularCloudLayer(delta) {
     regularCloudGroup.visible = inPlay;
     if (!inPlay) return;
 
-    const t = Date.now() * 0.001;
+    const t = _frameNow * 0.001;
     const baseOpacity = isNight ? 0.17 : 0.34;
     const heavenFade = 1 - Math.min(1, heavenBlend * 1.35);
 
@@ -2166,7 +2187,7 @@ function updateAtmosphericMaterialDimming() {
 
 /** Updates the HUD landing-zone indicator (type label and colour) to reflect current landing state. */
 function updateLandingUI() {
-    const el = document.getElementById('landing-status');
+    const el = _elLandingStatus;
     if (!el) return;
     const show = isLanded || isAutoLanding || isWaterDitching;
     el.classList.toggle('hidden', !show);
@@ -2188,7 +2209,7 @@ function updateLandingUI() {
 
 /** Refreshes the radar-ping progress bar and cooldown display in the HUD. */
 function updateRadarPingUI() {
-    const btn = document.getElementById('scan-btn');
+    const btn = _elScanBtn;
     if (!btn) return;
 
     const isActive = radarPingTimer > 0;
@@ -2211,8 +2232,8 @@ function updateRadarPingUI() {
 
 /** Updates the heat gauge fill width and colour to reflect current heat level and maximum. */
 function updateHeatUI() {
-    const row = document.getElementById('heat-row');
-    const fill = document.getElementById('heat-fill');
+    const row = _elHeatRow;
+    const fill = _elHeatFill;
     if (!row || !fill) return;
     row.classList.toggle('hidden', !optHeatMechanic);
     if (!optHeatMechanic) return;
@@ -2233,15 +2254,15 @@ function resetHackMini() {
     hackMiniSafeHalf = 0.09;
     hackMiniBoostTimer = 0;
     hackMiniInSafe = false;
-    const row = document.getElementById('hack-row');
+    const row = _elHackRow;
     if (row) row.classList.add('hidden');
-    const btn = document.getElementById('hack-sync-btn');
+    const btn = _elHackSyncBtn;
     if (btn) btn.classList.add('hidden');
 }
 
 /** Shows or hides the threat-lock status indicator and updates its countdown text. */
 function updateThreatUI() {
-    const el = document.getElementById('threat-status');
+    const el = _elThreatStatus;
     if (!el) return;
     const show = !!optThreatSystem && threatTagTimer > 0 && gameState === 'PLAYING';
     el.classList.toggle('hidden', !show);
@@ -2250,7 +2271,7 @@ function updateThreatUI() {
 
 /** Shows the Heaven-zone status indicator when the drone is in the easter-egg altitude band, displaying the distance to the nearest lounge isle. */
 function updateHeavenIndicatorUI() {
-    const el = document.getElementById('heaven-status');
+    const el = _elHeavenStatus;
     if (!el) return;
 
     const inHeaven = gameState === 'PLAYING' && heavenBlend > 0.16;
@@ -2278,11 +2299,11 @@ function updateHeavenIndicatorUI() {
 
 /** Renders the hack mini-game bar (progress fill, safe-zone window, oscillating marker) and the sync button. */
 function updateHackUI() {
-    const row = document.getElementById('hack-row');
-    const fill = document.getElementById('hack-fill');
-    const marker = document.getElementById('hack-marker');
-    const safeZone = document.getElementById('hack-safe-zone');
-    const btn = document.getElementById('hack-sync-btn');
+    const row = _elHackRow;
+    const fill = _elHackFill;
+    const marker = _elHackMarker;
+    const safeZone = _elHackSafeZone;
+    const btn = _elHackSyncBtn;
     if (!row || !fill || !marker || !safeZone) return;
 
     const canShow = optHackObjectives && gameState === 'PLAYING' && !isLanded && !isRTH && hackMiniActiveTarget;
@@ -2395,7 +2416,7 @@ function triggerRadarPing() {
 
 /** Applies the correct active/inactive CSS class to the wind toggle button. */
 function updateWindUI() {
-    const btn = document.getElementById('wind-btn');
+    const btn = _elWindBtn;
     if (!btn) return;
     btn.className = isWindEnabled
         ? 'px-2.5 py-2 btn-active-purple text-[9px] font-bold uppercase rounded-sm transition-all'
@@ -2451,9 +2472,9 @@ function toggleMute() { isMuted = !isMuted; updateHUDStyles(); if (isMuted && en
 /** Toggles night-vision goggles: enables the NVG green overlay, adjusts scanline opacity, and boosts ambient light. */
 function toggleNVG() { 
     isNVG = !isNVG; updateHUDStyles();
-    const overlay = document.getElementById('nvg-overlay');
+    const overlay = _elNvgOverlay;
     if (overlay) overlay.style.display = isNVG ? 'block' : 'none';
-    const scanlines = document.getElementById('scanlines');
+    const scanlines = _elScanlines;
     if (scanlines) scanlines.style.opacity = isNVG ? '0.30' : '0.22';
     if (ambientLight) ambientLight.intensity = isNVG ? 1.8 : (isNight ? 0.2 : 0.6);
 }
@@ -2605,6 +2626,31 @@ function init() {
     _elSignalFill = document.getElementById('signal-fill');
     _elMinimapCanvas = document.getElementById('minimap-canvas');
     _elHeavenOverlay = document.getElementById('heaven-overlay');
+    _elLandingStatus = document.getElementById('landing-status');
+    _elScanBtn = document.getElementById('scan-btn');
+    _elHeatRow = document.getElementById('heat-row');
+    _elHeatFill = document.getElementById('heat-fill');
+    _elHackRow = document.getElementById('hack-row');
+    _elHackFill = document.getElementById('hack-fill');
+    _elHackMarker = document.getElementById('hack-marker');
+    _elHackSafeZone = document.getElementById('hack-safe-zone');
+    _elHackSyncBtn = document.getElementById('hack-sync-btn');
+    _elThreatStatus = document.getElementById('threat-status');
+    _elHeavenStatus = document.getElementById('heaven-status');
+    _elNvgBtn = document.getElementById('nvg-btn');
+    _elLightBtn = document.getElementById('light-btn');
+    _elMuteBtn = document.getElementById('mute-btn');
+    _elTurboBtn = document.getElementById('turbo-btn');
+    _elRthBtn = document.getElementById('rth-btn');
+    _elLandBtn = document.getElementById('land-btn');
+    _elSacBtn = document.getElementById('sacrifice-life-btn');
+    _elRthStatus = document.getElementById('rth-status');
+    _elWindBtn = document.getElementById('wind-btn');
+    _elSignalStatic = document.getElementById('signal-static');
+    _elHealthFill = document.getElementById('health-fill');
+    _elCrashFlash = document.getElementById('crash-flash');
+    _elNvgOverlay = document.getElementById('nvg-overlay');
+    _elScanlines = document.getElementById('scanlines');
     buildMinimapBgCanvas(); // pre-bake static island background for minimap
     createRegularCloudLayer();
     createHeavenEasterEgg();
@@ -2824,7 +2870,7 @@ function updateEngine(power) {
 
     // Harmonic tracking.
     engineOscillators.forEach((o, i) => {
-        const jitter = 1 + 0.003 * Math.sin(Date.now() * 0.01 + i);
+        const jitter = 1 + 0.003 * Math.sin(_frameNow * 0.01 + i);
         o.osc.frequency.setTargetAtTime(rpmHz * o.mult * jitter, now, 0.04);
     });
 }
@@ -3647,7 +3693,7 @@ function isSpawnInsideBuilding(x, y, z, marginXZ = 0.8) {
     for (let i = 0; i < obstacles.length; i++) {
         const obs = obstacles[i];
         if (!obs || !obs.userData || obs.userData.kind !== 'building') continue;
-        const box = new THREE.Box3().setFromObject(obs);
+        const box = getObstacleBox(obs);
         const withinX = x >= box.min.x - marginXZ && x <= box.max.x + marginXZ;
         const withinZ = z >= box.min.z - marginXZ && z <= box.max.z + marginXZ;
         if (!withinX || !withinZ) continue;
@@ -4378,7 +4424,7 @@ function updateBatteryChuteVisual() {
     if (!batteryChute || !drone) return;
     batteryChute.visible = isBatteryEmergency && batteryChuteDeployed;
     if (!batteryChute.visible) return;
-    const sway = Math.sin(Date.now() * 0.003) * 0.15;
+    const sway = Math.sin(_frameNow * 0.003) * 0.15;
     batteryChute.position.set(drone.position.x, drone.position.y + 0.4, drone.position.z);
     batteryChute.rotation.y = droneYaw;
     batteryChute.rotation.z = sway;
@@ -4495,7 +4541,7 @@ function handleImpact(reason) {
     resetBatteryEmergencyState();
     isWaterDitching = false; waterDitchTimer = 0;
     isLanded = false; landingType = 'GROUND'; landingY = LANDING_GROUND_Y; updateLandingUI();
-    const flash = document.getElementById('crash-flash'); if (flash) { flash.style.opacity = '1'; setTimeout(() => flash.style.opacity = '0', 250); }
+    const flash = _elCrashFlash; if (flash) { flash.style.opacity = '1'; setTimeout(() => flash.style.opacity = '0', 250); }
     lives--; updateLivesUI();
     if (lives > 0) { drone.position.set(0, 15, 0); drone.velocity.set(0, 0, 0); drone.rotation.set(0, 0, 0); drone.quaternion.identity(); droneYaw = 0; rotorSpool = 0; battery = 100; } else endGame(reason);
 }
@@ -4510,6 +4556,9 @@ function startGame() {
     isAutoLanding = false; isWaterDitching = false; autoLandBeepTimer = 0; rotorSpool = 0;
     resetBatteryEmergencyState();
     radarPingTimer = 0; radarPingCooldown = 0;
+    // Reset dirty-flag shadows so UI refreshes on first frame of new game
+    _lastDisplayedScore = -1; _prevRadarPingActive = false;
+    _prevThreatTagTimer = -1; _prevHeavenVisible = false; _prevHeat = -1; _prevOptHeatMechanic = false;
     resetHackMini();
     document.getElementById('menu').classList.add('hidden'); 
     document.getElementById('game-over').classList.add('hidden'); 
@@ -4573,7 +4622,11 @@ function updateDrone(delta) {
     // Radar ping timers (minimap visualization only)
     if (radarPingCooldown > 0) radarPingCooldown = Math.max(0, radarPingCooldown - delta);
     if (radarPingTimer > 0) radarPingTimer = Math.max(0, radarPingTimer - delta);
-    updateRadarPingUI();
+    const _radarPingNowActive = radarPingTimer > 0 || radarPingCooldown > 0;
+    if (_radarPingNowActive || _prevRadarPingActive) {
+        updateRadarPingUI();
+        _prevRadarPingActive = _radarPingNowActive;
+    }
 
     // Landing grace timer prevents the touchdown logic from immediately re-locking after takeoff.
     if (landingTakeoffGrace > 0) landingTakeoffGrace = Math.max(0, landingTakeoffGrace - delta);
@@ -4615,10 +4668,10 @@ function updateDrone(delta) {
         drone.position.y = THREE.MathUtils.lerp(waterDitchStartY, sinkY, t);
         const wobbleRoll = Math.sin(waterDitchTimer * 14) * (1 - t) * 0.25;
         const pitchDown = 0.12 + t * 0.46;
-        const _yawQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), droneYaw);
-        const _pitchQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), pitchDown);
-        const _rollQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), wobbleRoll);
-        drone.quaternion.slerp(new THREE.Quaternion().copy(_yawQ).multiply(_pitchQ).multiply(_rollQ), 0.14);
+        _scratchQ1.setFromAxisAngle(_scratchV3a.set(0, 1, 0), droneYaw);
+        _scratchQ2.setFromAxisAngle(_scratchV3b.set(1, 0, 0), pitchDown);
+        _scratchQ3.setFromAxisAngle(_scratchV3c.set(0, 0, 1), wobbleRoll);
+        drone.quaternion.slerp(_scratchQ4.copy(_scratchQ1).multiply(_scratchQ2).multiply(_scratchQ3), 0.14);
         throttle = Math.max(0, 0.30 * (1 - t));
         if (t >= 1) {
             handleImpact('SLEEPING WITH THE FISHES');
@@ -4645,15 +4698,14 @@ function updateDrone(delta) {
             drone.velocity.z *= 0.985;
         }
 
-        const _yawQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), droneYaw);
-        const _pitchQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.07);
-        const _rollQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.sin(Date.now() * 0.003) * 0.06);
-        drone.quaternion.slerp(new THREE.Quaternion().copy(_yawQ).multiply(_pitchQ).multiply(_rollQ), 0.08);
+        _scratchQ1.setFromAxisAngle(_scratchV3a.set(0, 1, 0), droneYaw);
+        _scratchQ2.setFromAxisAngle(_scratchV3b.set(1, 0, 0), 0.07);
+        _scratchQ3.setFromAxisAngle(_scratchV3c.set(0, 0, 1), Math.sin(_frameNow * 0.003) * 0.06);
+        drone.quaternion.slerp(_scratchQ4.copy(_scratchQ1).multiply(_scratchQ2).multiply(_scratchQ3), 0.08);
         throttle = 0.06;
     } else if (isRTH) {
         // RTH is an autopilot mode: keep visuals level while steering yaw/altitude.
-        const _rthLevelQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), droneYaw);
-        drone.quaternion.slerp(_rthLevelQ, 0.08);
+        drone.quaternion.slerp(_scratchQ1.setFromAxisAngle(_scratchV3a.set(0, 1, 0), droneYaw), 0.08);
         switch(rthStage) {
             case 0: // Climb
                 drone.velocity.y = CONFIG.DRONE_LIFT;
@@ -4663,17 +4715,19 @@ function updateDrone(delta) {
                 break;
             case 1: // Navigate to 0,0
                 drone.velocity.y = 0;
-                const distToHome = new THREE.Vector2(drone.position.x, drone.position.z).length();
+                const distToHome = Math.sqrt(drone.position.x * drone.position.x + drone.position.z * drone.position.z);
                 throttle = 0.65; 
                 if (distToHome < 2) {
                     drone.position.x = 0; drone.position.z = 0;
                     drone.velocity.set(0, 0, 0);
                     rthStage = 2;
                 } else {
-                    const dir = new THREE.Vector2(-drone.position.x, -drone.position.z).normalize();
-                    drone.velocity.x = dir.x * CONFIG.RTH_CRUISE_SPEED;
-                    drone.velocity.z = dir.y * CONFIG.RTH_CRUISE_SPEED;
-                    const targetAngle = Math.atan2(dir.x, dir.y);
+                    const _rthInvLen = 1 / distToHome;
+                    const _rthDirX = -drone.position.x * _rthInvLen;
+                    const _rthDirZ = -drone.position.z * _rthInvLen;
+                    drone.velocity.x = _rthDirX * CONFIG.RTH_CRUISE_SPEED;
+                    drone.velocity.z = _rthDirZ * CONFIG.RTH_CRUISE_SPEED;
+                    const targetAngle = Math.atan2(_rthDirX, _rthDirZ);
                     droneYaw = THREE.MathUtils.lerp(droneYaw, targetAngle, 0.05);
                 }
                 break;
@@ -4706,8 +4760,7 @@ function updateDrone(delta) {
                 drone.velocity.set(0, 0, 0);
                 drone.position.y = landingY;
                 throttle = 0;
-                const _landLevelQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), droneYaw);
-                drone.quaternion.slerp(_landLevelQ, 0.15);
+                drone.quaternion.slerp(_scratchQ1.setFromAxisAngle(_scratchV3a.set(0, 1, 0), droneYaw), 0.15);
             }
         }
 
@@ -4719,7 +4772,7 @@ function updateDrone(delta) {
             const heatLiftScale = optHeatMechanic ? (1 - 0.25 * heatClamp) : 1;
             const canTurbo = isTurbo && (!optHeatMechanic || heatRatio < 1);
             const bumpErratic = bumpErraticTimer > 0 ? (bumpErraticTimer / BUMP_ERRATIC_DURATION) : 0;
-            const wobbleTime = Date.now() * 0.013 + bumpErraticPhase;
+            const wobbleTime = _frameNow * 0.013 + bumpErraticPhase;
 
             if (isAutoLanding) {
                 drone.velocity.x *= 0.88;
@@ -4754,15 +4807,13 @@ function updateDrone(delta) {
             const rollInput = Math.abs(sideCmd) < visualTiltDeadzone ? 0 : sideCmd;
             const pitchTarget = pitchInput * 0.16 + Math.sin(wobbleTime * 1.9) * 0.10 * bumpErratic;
             const rollTarget = rollInput * 0.16 + Math.cos(wobbleTime * 1.5) * 0.12 * bumpErratic;
-            const _yawQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), droneYaw);
-            const _pitchQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), pitchTarget);
-            const _rollQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), rollTarget);
-            const _tiltTargetQ = new THREE.Quaternion().copy(_yawQ).multiply(_pitchQ).multiply(_rollQ);
-            drone.quaternion.slerp(_tiltTargetQ, 0.06);
+            _scratchQ1.setFromAxisAngle(_scratchV3a.set(0, 1, 0), droneYaw);
+            _scratchQ2.setFromAxisAngle(_scratchV3b.set(1, 0, 0), pitchTarget);
+            _scratchQ3.setFromAxisAngle(_scratchV3c.set(0, 0, 1), rollTarget);
+            drone.quaternion.slerp(_scratchQ4.copy(_scratchQ1).multiply(_scratchQ2).multiply(_scratchQ3), 0.06);
 
-            const yawQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), droneYaw);
-            const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(yawQuat);
-            const rgt = new THREE.Vector3(1, 0, 0).applyQuaternion(yawQuat);
+            const fwd = _scratchV3a.set(0, 0, 1).applyQuaternion(_scratchQ1);
+            const rgt = _scratchV3b.set(1, 0, 0).applyQuaternion(_scratchQ1);
             drone.velocity.addScaledVector(fwd, forwardCmd * speed);
             drone.velocity.addScaledVector(rgt, -sideCmd * speed);
             if (bumpErratic > 0) {
@@ -4772,7 +4823,7 @@ function updateDrone(delta) {
             drone.velocity.x *= CONFIG.DAMPING; drone.velocity.z *= CONFIG.DAMPING;
             if (Math.abs(input.left.y) < 0.05) {
                 drone.velocity.y *= 0.85;
-                drone.position.y += Math.sin(Date.now() * 0.005) * CONFIG.HOVER_STABILITY;
+                drone.position.y += Math.sin(_frameNow * 0.005) * CONFIG.HOVER_STABILITY;
             }
             throttle = isAutoLanding ? 0.4 : Math.sqrt(input.left.x**2 + input.left.y**2 + input.right.x**2 + input.right.y**2);
         }
@@ -4884,7 +4935,7 @@ function updateDrone(delta) {
                     const lowerY = expectedAnchorY - 0.30;
                     // Wider upper window helps the drone "lock" before hitting crowns/spires.
                     const upperY = expectedAnchorY + Math.min(1.25, 0.35 + protrusion * 0.05);
-                    const landingProbe = new THREE.Vector3(drone.position.x, expectedAnchorY + 0.16, drone.position.z);
+                    const landingProbe = _scratchV3a.set(drone.position.x, expectedAnchorY + 0.16, drone.position.z);
 
                     if (isPointBlockedByRoofDetail(obs, landingProbe)) return;
 
@@ -4950,12 +5001,12 @@ function updateDrone(delta) {
             if (body && body.material && typeof body.material.emissiveIntensity === 'number') {
                 const dDrone = drone.position.distanceTo(t.position);
                 const proximity = 1 - Math.min(1, dDrone / 140);
-                const pulse = 0.7 + 0.3 * Math.sin(Date.now() * 0.01 + idx);
+                const pulse = 0.7 + 0.3 * Math.sin(_frameNow * 0.01 + idx);
                 body.material.emissiveIntensity = 0.8 + proximity * 1.1 * pulse + (threatTagTimer > 0 ? 0.6 : 0);
             }
             const glow = t.userData.glow;
             if (glow && glow.material) {
-                const pulse = 0.45 + 0.55 * Math.abs(Math.sin(Date.now() * 0.012 + idx));
+                const pulse = 0.45 + 0.55 * Math.abs(Math.sin(_frameNow * 0.012 + idx));
                 glow.material.opacity = 0.35 + 0.35 * pulse + (threatTagTimer > 0 ? 0.25 : 0);
                 glow.scale.setScalar(1 + 0.05 * pulse);
             }
@@ -4982,8 +5033,15 @@ function updateDrone(delta) {
         }
     }
 
-    updateThreatUI();
-    updateHeavenIndicatorUI();
+    if (threatTagTimer !== _prevThreatTagTimer) {
+        updateThreatUI();
+        _prevThreatTagTimer = threatTagTimer;
+    }
+    const _heavenVisible = heavenBlend > 0.16;
+    if (_heavenVisible || _prevHeavenVisible) {
+        updateHeavenIndicatorUI();
+        _prevHeavenVisible = _heavenVisible;
+    }
 
     // Battery doesn't deplete while landed.
     if (!isLanded) {
@@ -5003,21 +5061,24 @@ function updateDrone(delta) {
         const gain = (throttleStress * 10 + verticalStress * 0.9 + turboStress * 18) * delta * gainMult;
         heat = Math.max(0, Math.min(heatMaxEff * 1.05, heat + gain - cooling * delta));
         isOverheated = heat >= heatMaxEff;
-        updateHeatUI();
         if (isOverheated) isTurbo = false;
     } else {
         // Keep heat inert when feature disabled.
         heat = 0;
+    }
+    const _heatFloor = Math.floor(heat);
+    if (_heatFloor !== _prevHeat || optHeatMechanic !== _prevOptHeatMechanic) {
         updateHeatUI();
+        _prevHeat = _heatFloor;
+        _prevOptHeatMechanic = optHeatMechanic;
     }
 
-    const healthFill = document.getElementById('health-fill');
     const batteryClamped = Math.max(0, battery);
-    if (healthFill) {
-        healthFill.style.width = `${batteryClamped}%`;
-        if (batteryClamped > 60) healthFill.style.background = 'linear-gradient(90deg, rgba(34,197,94,1), rgba(22,163,74,1))';
-        else if (batteryClamped > 25) healthFill.style.background = 'linear-gradient(90deg, rgba(245,158,11,1), rgba(234,179,8,1))';
-        else healthFill.style.background = 'linear-gradient(90deg, rgba(220,38,38,1), rgba(239,68,68,1))';
+    if (_elHealthFill) {
+        _elHealthFill.style.width = `${batteryClamped}%`;
+        if (batteryClamped > 60) _elHealthFill.style.background = 'linear-gradient(90deg, rgba(34,197,94,1), rgba(22,163,74,1))';
+        else if (batteryClamped > 25) _elHealthFill.style.background = 'linear-gradient(90deg, rgba(245,158,11,1), rgba(234,179,8,1))';
+        else _elHealthFill.style.background = 'linear-gradient(90deg, rgba(220,38,38,1), rgba(239,68,68,1))';
     }
     // Engine audio reacts to collective (up/down) and stick activity (forward/strafe/yaw).
     // Use signed-up for extra punch while climbing.
@@ -5047,17 +5108,17 @@ function updateDrone(delta) {
     const currentBeachWidth = isAngleInBeach(Math.atan2(drone.position.z, drone.position.x)) ? 15 : 0;
     
     if (dist > noisyR + currentBeachWidth) { 
-        const staticOverlay = document.getElementById('signal-static');
         const intensity = Math.min(1.0, (dist - (noisyR + currentBeachWidth)) / (CONFIG.MAX_SIGNAL_DIST - (noisyR + currentBeachWidth)));
         signal = 100 * (1 - intensity);
-        staticOverlay.style.opacity = (Math.random() < intensity * 0.95) ? (intensity * 0.75 + Math.random() * 0.25) : 0.05;
+        if (_elSignalStatic) _elSignalStatic.style.opacity = (Math.random() < intensity * 0.95) ? (intensity * 0.75 + Math.random() * 0.25) : 0.05;
     } else {
         signal = 100;
-        const staticOverlay = document.getElementById('signal-static');
-        if (optDynamicWeather && weatherState !== 'CLEAR' && !isLanded) {
-            staticOverlay.style.opacity = 0.05 + 0.12 * weatherIntensity;
-        } else {
-            staticOverlay.style.opacity = 0;
+        if (_elSignalStatic) {
+            if (optDynamicWeather && weatherState !== 'CLEAR' && !isLanded) {
+                _elSignalStatic.style.opacity = 0.05 + 0.12 * weatherIntensity;
+            } else {
+                _elSignalStatic.style.opacity = 0;
+            }
         }
     }
     if (optDynamicWeather && weatherState !== 'CLEAR' && !isLanded) {
@@ -5240,10 +5301,14 @@ function updateDrone(delta) {
         }
     }
     updateBatteryChuteVisual();
-    const camPos = drone.position.clone().add(new THREE.Vector3(0, 2.5, -6.5).applyQuaternion(drone.quaternion));
-    camera.position.lerp(camPos, 0.12); camera.lookAt(drone.position.clone().add(new THREE.Vector3(0, -0.6, 2.5).applyQuaternion(drone.quaternion)));
+    const camPos = _scratchV3a.set(0, 2.5, -6.5).applyQuaternion(drone.quaternion).add(drone.position);
+    camera.position.lerp(camPos, 0.12);
+    camera.lookAt(_scratchV3b.set(0, -0.6, 2.5).applyQuaternion(drone.quaternion).add(drone.position));
     updateAtmosphericMaterialDimming();
-    if (_elScoreDisplay) _elScoreDisplay.innerText = score.toString().padStart(4, '0');
+    if (_elScoreDisplay && score !== _lastDisplayedScore) {
+        _elScoreDisplay.innerText = score.toString().padStart(4, '0');
+        _lastDisplayedScore = score;
+    }
 }
 
 /**
@@ -5262,13 +5327,13 @@ function createParticles(pos, color, count = 40) {
 
 /** Main render loop: updates drone physics, cloud and Heaven animations, particles, entity rotations, minimap, and renders the frame. */
 function animate() {
-    requestAnimationFrame(animate); const delta = clock.getDelta(); updateDrone(delta);
+    requestAnimationFrame(animate); _frameNow = Date.now(); const delta = clock.getDelta(); updateDrone(delta);
     updateRegularCloudLayer(delta);
     updateHeavenEasterEgg(delta);
     for (let i = particles.length - 1; i >= 0; i--) { const p = particles[i]; p.position.add(p.velocity); p.life -= delta * 0.9; p.material.opacity = p.life; p.scale.setScalar(p.life); if (p.life <= 0) { scene.remove(p); particles.splice(i, 1); } }
-    targets.forEach(t => { t.rotation.y += 0.06; t.position.y += Math.sin(Date.now()*0.003)*0.015; });
-    powerups.forEach(p => { p.rotation.y += 0.04; p.position.y += Math.sin(Date.now()*0.002)*0.02; });
-    extraLives.forEach(h => { h.rotation.y += 0.08; h.position.y += Math.sin(Date.now()*0.004)*0.01; });
+    targets.forEach(t => { t.rotation.y += 0.06; t.position.y += Math.sin(_frameNow*0.003)*0.015; });
+    powerups.forEach(p => { p.rotation.y += 0.04; p.position.y += Math.sin(_frameNow*0.002)*0.02; });
+    extraLives.forEach(h => { h.rotation.y += 0.08; h.position.y += Math.sin(_frameNow*0.004)*0.01; });
     crates.forEach(c => c.rotation.y += 0.01);
     if (gameState === 'PLAYING') drawMinimap();
     renderer.render(scene, camera);
@@ -5335,7 +5400,7 @@ function drawMinimap() {
     ctx.fillStyle = 'red'; targets.forEach(t => { ctx.beginPath(); ctx.arc(ctr + t.position.x * scale, ctr + t.position.z * scale, 2, 0, Math.PI * 2); ctx.fill(); });
     if (optThreatSystem && threats && threats.length > 0) {
         const tagged = threatTagTimer > 0;
-        const flash = tagged ? (0.6 + 0.4 * Math.abs(Math.sin(Date.now() * 0.02))) : 0.85;
+        const flash = tagged ? (0.6 + 0.4 * Math.abs(Math.sin(_frameNow * 0.02))) : 0.85;
         ctx.fillStyle = `rgba(255,70,70,${flash})`;
         threats.forEach(t => { ctx.beginPath(); ctx.arc(ctr + t.position.x * scale, ctr + t.position.z * scale, tagged ? 2.6 : 2.1, 0, Math.PI * 2); ctx.fill(); });
     }
@@ -5374,7 +5439,7 @@ function drawMinimap() {
     // Radar sweep + ping highlight
     if (ping) {
         const pingAlpha = (optDynamicWeather && weatherState === 'STORM') ? 0.6 : 1.0;
-        const sweep = ((Date.now() * 0.002) % (Math.PI * 2));
+        const sweep = ((_frameNow * 0.002) % (Math.PI * 2));
         const sweepSpan = Math.PI / 6;
         ctx.save();
         ctx.translate(ctr, ctr);
