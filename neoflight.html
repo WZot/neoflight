@@ -499,6 +499,7 @@ let weatherIntensity = 0; // 0..1
 let threats = [];
 let threatTagTimer = 0;
 
+/** Loads saved module upgrade levels and accumulated points from localStorage. */
 function loadModulesFromStorage() {
     try {
         const raw = localStorage.getItem('neoflight_modules_v1');
@@ -515,12 +516,14 @@ function loadModulesFromStorage() {
     } catch (e) {}
 }
 
+/** Persists current module points and upgrade levels to localStorage. */
 function saveModulesToStorage() {
     try {
         localStorage.setItem('neoflight_modules_v1', JSON.stringify({ modulePoints, moduleLevels }));
     } catch (e) {}
 }
 
+/** Refreshes the module-bay panel, showing or hiding upgrade buttons based on available points and current levels. */
 function updateModuleBayUI() {
     const bay = document.getElementById('module-bay');
     const pointsEl = document.getElementById('module-points');
@@ -550,6 +553,7 @@ function updateModuleBayUI() {
     setBtn('buy-radar-suite', radarLvl < 2 && modulePoints > 0, `RADAR SUITE (L${radarLvl + 1})`);
 }
 
+/** Spends one module point to upgrade the Heat Sink module (max level 2). */
 function buyHeatSink() {
     if (!optModules) return;
     if (moduleLevels.heatSinks >= 2) return;
@@ -561,6 +565,7 @@ function buyHeatSink() {
     updateHeatUI();
 }
 
+/** Spends one module point to upgrade the Hack Assist module (max level 2). */
 function buyHackAssist() {
     if (!optModules) return;
     if (moduleLevels.hackAssist >= 2) return;
@@ -571,6 +576,7 @@ function buyHackAssist() {
     updateModuleBayUI();
 }
 
+/** Spends one module point to upgrade the Radar Suite module (max level 2). */
 function buyRadarSuite() {
     if (!optModules) return;
     if (moduleLevels.radarSuite >= 2) return;
@@ -597,12 +603,22 @@ const input = { left: { x: 0, y: 0 }, right: { x: 0, y: 0 } };
 const keys = {};
 const activeTouches = new Map();
 
+/**
+ * Returns true if the given polar angle (radians) falls within a sandy beach sector.
+ * @param {number} angle - Polar angle in radians.
+ * @returns {boolean}
+ */
 function isAngleInBeach(angle) {
     const normalized = angle % (Math.PI * 2);
     const positive = normalized < 0 ? normalized + Math.PI * 2 : normalized;
     return BEACH_SECTORS.some(s => positive >= s.start && positive <= s.end);
 }
 
+/**
+ * Returns the island shoreline radius at a given polar angle, shaped with several sine-wave layers.
+ * @param {number} angle - Polar angle in radians.
+ * @returns {number} Radius in world units.
+ */
 function getIslandRadius(angle) {
     let r = CONFIG.BASE_ISLAND_R;
     r += Math.sin(angle * 4) * 70;
@@ -611,6 +627,12 @@ function getIslandRadius(angle) {
     return r;
 }
 
+/**
+ * Returns true if the world-space XZ position is over land (including beach margin).
+ * @param {number} x
+ * @param {number} z
+ * @returns {boolean}
+ */
 function isOverLandSurface(x, z) {
     const angle = Math.atan2(z, x);
     const beachWidth = isAngleInBeach(angle) ? 15 : 0;
@@ -618,10 +640,23 @@ function isOverLandSurface(x, z) {
     return dist <= getIslandRadius(angle) + beachWidth;
 }
 
+/**
+ * Returns true if the world-space XZ position is over open water.
+ * @param {number} x
+ * @param {number} z
+ * @returns {boolean}
+ */
 function isOverWater(x, z) {
     return !isOverLandSurface(x, z);
 }
 
+/**
+ * Returns true if the XZ position (plus nearby sample offsets) is predominantly over water,
+ * indicating a safe area to ditch the drone into the ocean.
+ * @param {number} x
+ * @param {number} z
+ * @returns {boolean}
+ */
 function isWaterTouchdownZone(x, z) {
     const samples = [
         [0, 0],
@@ -641,6 +676,12 @@ function isWaterTouchdownZone(x, z) {
 // ── Obstacle Box3 caching ────────────────────────────────────────────────────
 // All scene obstacles are static. Computing Box3.setFromObject() every frame
 // is expensive (traverses the entire subtree). Cache once at build time.
+/**
+ * Pre-computes and caches world-space Box3 bounds for an obstacle and all of its
+ * body, solid-detail, and roof-no-land collider children. Call once after the
+ * obstacle is placed in the scene.
+ * @param {THREE.Object3D} obj - The obstacle group to cache.
+ */
 function cacheObstacleData(obj) {
     if (!obj) return;
     obj.updateWorldMatrix(true, true);
@@ -668,15 +709,32 @@ function cacheObstacleData(obj) {
         d.userData.cachedBox = new THREE.Box3().setFromObject(d);
     }
 }
+/**
+ * Returns the cached world-space Box3 for an obstacle, computing it on demand if missing.
+ * @param {THREE.Object3D} obs
+ * @returns {THREE.Box3}
+ */
 function getObstacleBox(obs) {
     if (!obs.userData.cachedBox) cacheObstacleData(obs);
     return obs.userData.cachedBox;
 }
 
+/**
+ * Returns the cached Box3 for a body-collider mesh, falling back to a live computation.
+ * @param {THREE.Mesh} collider
+ * @returns {THREE.Box3}
+ */
 function getBodyColliderBox(collider) {
     return (collider.userData && collider.userData.cachedBox) ? collider.userData.cachedBox : new THREE.Box3().setFromObject(collider);
 }
 
+/**
+ * Finds the body-collider box of an obstacle that contains the given 3D point.
+ * Falls back to the obstacle's overall bounding box when no body colliders are defined.
+ * @param {THREE.Object3D} obs
+ * @param {THREE.Vector3} point
+ * @returns {THREE.Box3|null} The containing box, or null if none contains the point.
+ */
 function getContainingBodyColliderBox(obs, point) {
     const bodyColliders = (obs.userData && Array.isArray(obs.userData.bodyColliders)) ? obs.userData.bodyColliders : [];
     if (bodyColliders.length === 0) {
@@ -692,6 +750,13 @@ function getContainingBodyColliderBox(obs, point) {
     return null;
 }
 
+/**
+ * Finds the body-collider box whose XZ footprint spans the given point, ignoring the Y axis.
+ * Useful for roof-landing checks where altitude may be above the collider top.
+ * @param {THREE.Object3D} obs
+ * @param {THREE.Vector3} point
+ * @returns {THREE.Box3|null}
+ */
 function getBodyColliderBoxForXZ(obs, point) {
     const bodyColliders = (obs.userData && Array.isArray(obs.userData.bodyColliders)) ? obs.userData.bodyColliders : [];
     if (bodyColliders.length === 0) return getObstacleBox(obs);
@@ -707,6 +772,15 @@ function getBodyColliderBoxForXZ(obs, point) {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Returns true if the given point is within the padded volume of any roof-detail
+ * collider on the obstacle (e.g. antenna, AC unit).
+ * @param {THREE.Object3D} obs
+ * @param {THREE.Vector3} point
+ * @param {number} [padXZ=0.7] - Horizontal padding added to each side of the box.
+ * @param {number} [padY=0.9] - Vertical padding added above the box top.
+ * @returns {boolean}
+ */
 function isPointBlockedByRoofDetail(obs, point, padXZ = 0.7, padY = 0.9) {
     const colliders = (obs.userData && Array.isArray(obs.userData.roofNoLandColliders)) ? obs.userData.roofNoLandColliders : [];
     for (let i = 0; i < colliders.length; i++) {
@@ -721,6 +795,12 @@ function isPointBlockedByRoofDetail(obs, point, padXZ = 0.7, padY = 0.9) {
     return false;
 }
 
+/**
+ * Attempts a gentle physics bump to push the drone off a rooftop detail (e.g. antenna).
+ * Only triggers at low speed and with a random chance, preserving the feel of a graze.
+ * @param {THREE.Box3} detailBox
+ * @returns {boolean} True if the bump was applied.
+ */
 function tryBumpOffRooftopDetail(detailBox) {
     if (roofBumpCooldown > 0) return false;
 
@@ -746,6 +826,12 @@ function tryBumpOffRooftopDetail(detailBox) {
     return true;
 }
 
+/**
+ * Attempts a gentle bump to push the drone off a park prop (bench, planter, etc.).
+ * Only triggers at low speed; harder impacts result in a full collision.
+ * @param {THREE.Box3} detailBox
+ * @returns {boolean} True if the bump was applied.
+ */
 function tryBumpOffParkProp(detailBox) {
     if (roofBumpCooldown > 0) return false;
 
@@ -770,6 +856,12 @@ function tryBumpOffParkProp(detailBox) {
     return true;
 }
 
+/**
+ * Attempts a forgiving lateral bump to deflect the drone away from a building body wall.
+ * Only activates at medium-or-lower speeds and a random threshold to add unpredictability.
+ * @param {THREE.Box3} bodyBox
+ * @returns {boolean} True if the bump was applied.
+ */
 function tryBumpOffBuildingBody(bodyBox) {
     if (roofBumpCooldown > 0) return false;
 
@@ -801,6 +893,7 @@ function tryBumpOffBuildingBody(bodyBox) {
     return true;
 }
 
+/** Iterates all building obstacles each frame, resolving any overlap with the drone. */
 function keepDroneOutOfBuildings() {
     for (let i = 0; i < obstacles.length; i++) {
         const obs = obstacles[i];
@@ -844,6 +937,12 @@ function keepDroneOutOfBuildings() {
     }
 }
 
+/**
+ * Teleports the drone to the nearest valid position outside the given obstacle.
+ * Handles building bodies, solid roof details, and spire hazards separately.
+ * @param {THREE.Object3D} obs - The obstacle to escape from.
+ * @param {THREE.Vector3|null} [referencePos=null] - Preferred escape direction origin; defaults to drone position.
+ */
 function snapDroneOutsideObstacle(obs, referencePos = null) {
     if (!obs) return;
 
@@ -922,6 +1021,11 @@ function snapDroneOutsideObstacle(obs, referencePos = null) {
     }
 }
 
+/**
+ * Determines how the drone is contacting an obstacle and what action to take.
+ * @param {THREE.Object3D} obs
+ * @returns {'none'|'bumped'|'impact'} Contact result: no contact, a forgiving bump, or a fatal impact.
+ */
 function resolveDroneObstacleContact(obs) {
     if (!obs) return false;
 
@@ -975,6 +1079,12 @@ function resolveDroneObstacleContact(obs) {
     return 'none';
 }
 
+/**
+ * Mulberry32 seeded pseudo-random number generator.
+ * Returns a closure that produces a float in [0, 1) on each call.
+ * @param {number} a - 32-bit integer seed.
+ * @returns {() => number}
+ */
 function mulberry32(a) {
     return function() {
         let t = a += 0x6D2B79F5;
@@ -984,6 +1094,11 @@ function mulberry32(a) {
     };
 }
 
+/**
+ * Generates a canvas-based building window texture with randomised lit and dark panes.
+ * @param {number} variant - Seed value used to vary the window layout between buildings.
+ * @returns {THREE.CanvasTexture}
+ */
 function createWindowTexture(variant) {
     const canvas = document.createElement('canvas');
     canvas.width = 96;
@@ -1038,6 +1153,14 @@ function createWindowTexture(variant) {
     return tex;
 }
 
+/**
+ * Builds a detailed highrise tower mesh (body, roof details, windows, spire) and adds it to the scene.
+ * @param {number} x - World X position.
+ * @param {number} z - World Z position.
+ * @param {number} height - Tower height in world units.
+ * @param {number} blockSize - Footprint half-size in world units.
+ * @returns {THREE.Group} The constructed tower group (already added to scene and obstacles).
+ */
 function createHighriseTower(x, z, height, blockSize) {
     const tower = new THREE.Group();
     tower.position.set(x, Y_LEVELS.BUILDING_BASE, z);
@@ -1377,6 +1500,7 @@ function createHighriseTower(x, z, height, blockSize) {
     return tower;
 }
 
+/** Applies active/inactive CSS classes to all HUD toggle buttons to reflect current game state. */
 function updateHUDStyles() {
     const btnNvg = document.getElementById('nvg-btn');
     const btnLight = document.getElementById('light-btn');
@@ -1401,6 +1525,7 @@ function updateHUDStyles() {
     document.getElementById('rth-status').classList.toggle('hidden', !isRTH);
 }
 
+/** Constructs all Three.js objects for the hidden "Heaven" easter egg zone (clouds, halos, arches, lounge isles, etc.). */
 function createHeavenEasterEgg() {
     heavenGroup = new THREE.Group();
     heavenGroup.visible = false;
@@ -1702,6 +1827,7 @@ function createHeavenEasterEgg() {
     scene.add(heavenLoungeGroup);
 }
 
+/** Hides all Heaven easter-egg geometry and resets blend/state variables to their defaults. */
 function resetHeavenEasterEgg() {
     heavenActive = false;
     heavenBlend = 0;
@@ -1725,6 +1851,7 @@ function resetHeavenEasterEgg() {
     if (ambientLight) ambientLight.intensity = isNVG ? 1.8 : (isNight ? 0.2 : 0.6);
 }
 
+/** Fires a one-shot burst of sparkle particles at the drone's position to celebrate Heaven ascension. */
 function triggerHeavenAscensionBurst() {
     heavenAscensionBurstTimer = HEAVEN_ASCENSION_BURST_DURATION;
     if (!drone) return;
@@ -1734,6 +1861,11 @@ function triggerHeavenAscensionBurst() {
     playSfx('pickup');
 }
 
+/**
+ * Per-frame update for the Heaven easter egg: fades the zone in/out based on altitude,
+ * animates halos, sparkles, beams, and the lounge-isle overlay.
+ * @param {number} delta - Seconds elapsed since last frame.
+ */
 function updateHeavenEasterEgg(delta) {
     if (!drone || !scene || gameState !== 'PLAYING') return;
 
@@ -1892,6 +2024,7 @@ function updateHeavenEasterEgg(delta) {
     }
 }
 
+/** Creates the decorative cloud layer (instanced planes) that drifts slowly across the sky. */
 function createRegularCloudLayer() {
     regularCloudGroup = new THREE.Group();
     regularClouds = [];
@@ -1980,6 +2113,10 @@ function createRegularCloudLayer() {
     scene.add(regularCloudGroup);
 }
 
+/**
+ * Advances cloud positions each frame and wraps them when they drift out of view.
+ * @param {number} delta - Seconds elapsed since last frame.
+ */
 function updateRegularCloudLayer(delta) {
     if (!regularCloudGroup) return;
     const inPlay = gameState === 'PLAYING';
@@ -2013,6 +2150,7 @@ function updateRegularCloudLayer(delta) {
     }
 }
 
+/** Adjusts cloud and sky material opacity/emissive based on current NVG and time-of-day state. */
 function updateAtmosphericMaterialDimming() {
     const fogDensity = (scene && scene.fog && scene.fog.isFogExp2) ? scene.fog.density : 0;
     const fogDim = Math.max(0.16, 1 - Math.min(0.78, fogDensity * 38));
@@ -2026,6 +2164,7 @@ function updateAtmosphericMaterialDimming() {
     }
 }
 
+/** Updates the HUD landing-zone indicator (type label and colour) to reflect current landing state. */
 function updateLandingUI() {
     const el = document.getElementById('landing-status');
     if (!el) return;
@@ -2047,6 +2186,7 @@ function updateLandingUI() {
     el.innerText = landingType === 'GROUND' ? 'ON GROUND' : 'ON ROOF';
 }
 
+/** Refreshes the radar-ping progress bar and cooldown display in the HUD. */
 function updateRadarPingUI() {
     const btn = document.getElementById('scan-btn');
     if (!btn) return;
@@ -2069,6 +2209,7 @@ function updateRadarPingUI() {
     btn.style.opacity = "1";
 }
 
+/** Updates the heat gauge fill width and colour to reflect current heat level and maximum. */
 function updateHeatUI() {
     const row = document.getElementById('heat-row');
     const fill = document.getElementById('heat-fill');
@@ -2083,6 +2224,7 @@ function updateHeatUI() {
     else fill.style.background = 'linear-gradient(90deg, rgba(147,51,234,1), rgba(124,58,237,1))';
 }
 
+/** Clears all hack mini-game state and hides the hack HUD row. */
 function resetHackMini() {
     hackMiniActiveTarget = null;
     hackMiniMarkerT = 0;
@@ -2097,6 +2239,7 @@ function resetHackMini() {
     if (btn) btn.classList.add('hidden');
 }
 
+/** Shows or hides the threat-lock status indicator and updates its countdown text. */
 function updateThreatUI() {
     const el = document.getElementById('threat-status');
     if (!el) return;
@@ -2105,6 +2248,7 @@ function updateThreatUI() {
     if (show) el.innerText = `THREAT LOCK ${threatTagTimer.toFixed(1)}s`;
 }
 
+/** Shows the Heaven-zone status indicator when the drone is in the easter-egg altitude band, displaying the distance to the nearest lounge isle. */
 function updateHeavenIndicatorUI() {
     const el = document.getElementById('heaven-status');
     if (!el) return;
@@ -2132,6 +2276,7 @@ function updateHeavenIndicatorUI() {
     }
 }
 
+/** Renders the hack mini-game bar (progress fill, safe-zone window, oscillating marker) and the sync button. */
 function updateHackUI() {
     const row = document.getElementById('hack-row');
     const fill = document.getElementById('hack-fill');
@@ -2176,6 +2321,11 @@ function updateHackUI() {
     }
 }
 
+/**
+ * Processes a player-triggered sync attempt in the hack mini-game.
+ * Advances hack progress and spawns green particles when the marker is inside the safe zone;
+ * penalises progress and spawns red particles when outside.
+ */
 function attemptHackSync() {
     if (gameState !== 'PLAYING') return;
     if (!optHackObjectives || isLanded || isRTH || !hackMiniActiveTarget) return;
@@ -2203,22 +2353,36 @@ function attemptHackSync() {
     updateHackUI();
 }
 
+/**
+ * Returns the effective heat capacity after applying Heat Sink module bonuses (+20 % per level).
+ * @returns {number}
+ */
 function getEffectiveHeatMax() {
     const lvl = optModules ? (moduleLevels.heatSinks || 0) : 0;
     return heatMax * (1 + 0.20 * lvl);
 }
 
+/**
+ * Returns the heat-gain rate multiplier after applying Heat Sink module bonuses (×0.85 per level).
+ * @returns {number}
+ */
 function getHeatGainMultiplier() {
     const lvl = optModules ? (moduleLevels.heatSinks || 0) : 0;
     return Math.pow(0.85, lvl);
 }
 
+/**
+ * Returns the randomised number of seconds required to complete a hack attempt,
+ * reduced by the Hack Assist module (×0.85 per level).
+ * @returns {number}
+ */
 function getHackRequiredSeconds() {
     const base = 2.2 + Math.random() * 1.2;
     const lvl = optModules ? (moduleLevels.hackAssist || 0) : 0;
     return base * Math.pow(0.85, lvl);
 }
 
+/** Activates the radar ping, setting its active timer and cooldown (extended by the Radar Suite module). */
 function triggerRadarPing() {
     if (gameState !== 'PLAYING') return;
     if (radarPingCooldown > 0) return;
@@ -2229,6 +2393,7 @@ function triggerRadarPing() {
     updateRadarPingUI();
 }
 
+/** Applies the correct active/inactive CSS class to the wind toggle button. */
 function updateWindUI() {
     const btn = document.getElementById('wind-btn');
     if (!btn) return;
@@ -2237,11 +2402,13 @@ function updateWindUI() {
         : 'px-2.5 py-2 btn-inactive text-[9px] font-bold uppercase rounded-sm transition-all';
 }
 
+/** Toggles wind simulation on or off and updates the wind button appearance. */
 function toggleWind() {
     isWindEnabled = !isWindEnabled;
     updateWindUI();
 }
 
+/** Refreshes all gameplay-option toggle buttons in the options panel to reflect current flag values. */
 function updateOptionsUI() {
     const set = (id, enabled) => {
         const el = document.getElementById(id);
@@ -2259,6 +2426,7 @@ function updateOptionsUI() {
     set('opt-modules', optModules);
 }
 
+/** Attaches click handlers to all option-panel buttons so they toggle their respective flags and refresh the UI. */
 function wireOptionsUI() {
     const toggles = [
         ['opt-heat', () => optHeatMechanic = !optHeatMechanic],
@@ -2278,7 +2446,9 @@ function wireOptionsUI() {
     });
 }
 
+/** Toggles audio mute and smoothly fades the engine gain if muting. */
 function toggleMute() { isMuted = !isMuted; updateHUDStyles(); if (isMuted && engineGain) engineGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.1); }
+/** Toggles night-vision goggles: enables the NVG green overlay, adjusts scanline opacity, and boosts ambient light. */
 function toggleNVG() { 
     isNVG = !isNVG; updateHUDStyles();
     const overlay = document.getElementById('nvg-overlay');
@@ -2287,9 +2457,12 @@ function toggleNVG() {
     if (scanlines) scanlines.style.opacity = isNVG ? '0.30' : '0.22';
     if (ambientLight) ambientLight.intensity = isNVG ? 1.8 : (isNight ? 0.2 : 0.6);
 }
+/** Toggles the tactical spotlight attached to the drone. */
 function toggleLight() { isLight = !isLight; if (tacticalLight) tacticalLight.visible = isLight; updateHUDStyles(); }
+/** Toggles turbo mode, which increases drone thrust and speed. */
 function toggleTurbo() { isTurbo = !isTurbo; updateHUDStyles(); }
 
+/** Highlights the currently selected drone design button and resets all others. */
 function updateDroneDesignUI() {
     const base = "drone-design-btn px-2.5 py-2 text-[9px] font-bold uppercase rounded-sm transition-all";
     const activeClasses = [
@@ -2308,12 +2481,18 @@ function updateDroneDesignUI() {
     }
 }
 
+/** Removes the existing drone mesh and recreates it from the current design selection. */
 function rebuildDroneDesign() {
     if (!scene) return;
     if (drone) scene.remove(drone);
     createDrone(droneDesign);
 }
 
+/**
+ * Swaps the drone's visual design while preserving its current position, orientation, and velocity.
+ * Safe to call during active flight.
+ * @param {number} id - Design index to switch to.
+ */
 function swapDroneDesignInPlace(id) {
     if (!scene || !drone) {
         droneDesign = id;
@@ -2341,12 +2520,17 @@ function swapDroneDesignInPlace(id) {
     if (tacticalLight) tacticalLight.visible = prevLight;
 }
 
+/**
+ * Sets the active drone design index (clamped to 0–5) and rebuilds the mesh when in the menu.
+ * @param {number} id - Design index to select.
+ */
 function setDroneDesign(id) {
     droneDesign = Math.max(0, Math.min(5, id | 0));
     updateDroneDesignUI();
     if (gameState === 'MENU') rebuildDroneDesign();
 }
 
+/** Unlocks and switches to the secret DeLorean drone design, playing a pickup sound and spawning celebratory particles. */
 function unlockSecretDeLorean() {
     swapDroneDesignInPlace(SECRET_DELOREAN_DESIGN);
     if (gameState === 'MENU') updateDroneDesignUI();
@@ -2354,6 +2538,11 @@ function unlockSecretDeLorean() {
     if (drone) createParticles(drone.position.clone(), 0x7dd3fc, 18);
 }
 
+/**
+ * Advances the Konami code keyboard sequence and triggers the secret unlock on completion.
+ * @param {string} code - KeyboardEvent.code value.
+ * @param {boolean} [isRepeat=false] - Whether this is a key-repeat event (ignored).
+ */
 function processKonamiKey(code, isRepeat = false) {
     if (isRepeat) return;
     const expected = KONAMI_SEQUENCE[konamiProgress];
@@ -2369,6 +2558,10 @@ function processKonamiKey(code, isRepeat = false) {
     konamiProgress = code === KONAMI_SEQUENCE[0] ? 1 : 0;
 }
 
+/**
+ * Advances the touch-swipe Konami sequence and triggers the secret unlock on completion.
+ * @param {string} code - Directional code derived from a swipe gesture (e.g. 'ArrowUp').
+ */
 function processTouchKonamiStep(code) {
     const expected = KONAMI_TOUCH_SEQUENCE[konamiTouchProgress];
     if (code === expected) {
@@ -2383,6 +2576,7 @@ function processTouchKonamiStep(code) {
     konamiTouchProgress = code === KONAMI_TOUCH_SEQUENCE[0] ? 1 : 0;
 }
 
+/** Bootstraps Three.js renderer, scene, lighting, environment, audio, controls, and UI; then starts the render loop. */
 function init() {
     scene = new THREE.Scene();
     camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 5000);
@@ -2448,13 +2642,22 @@ function init() {
     animate();
 }
 
+/**
+ * Shows or hides the on-screen joystick controllers.
+ * @param {boolean} visible
+ */
 function setControllerVisibility(visible) {
     const containers = document.querySelectorAll('.joystick-container');
     containers.forEach(c => c.style.opacity = visible ? "1" : "0.05");
 }
 
+/** Initialises the Web Audio API context (no-op if the browser does not support it). */
 function setupAudio() { try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e) {} }
 
+/**
+ * Plays a short synthesised sound effect.
+ * @param {'exp'|'pickup'|'autoland-beep'} type - Effect identifier.
+ */
 function playSfx(type) {
     if (!audioCtx || isMuted) return;
     const osc = audioCtx.createOscillator(); const gain = audioCtx.createGain();
@@ -2464,6 +2667,7 @@ function playSfx(type) {
     gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 1.2); osc.connect(gain); gain.connect(audioCtx.destination); osc.start(); osc.stop(audioCtx.currentTime + 1.2);
 }
 
+/** Builds and starts the layered drone engine audio graph (oscillators + noise + filter + distortion + compressor). */
 function startEngine() {
     if (!audioCtx || engineNode) return;
     if (audioCtx.state === 'suspended') audioCtx.resume();
@@ -2551,6 +2755,7 @@ function startEngine() {
     engineNoiseSource.start();
 }
 
+/** Disconnects and disposes the entire engine audio graph created by startEngine(). */
 function stopEngine() {
     if (!engineNode) return;
     try {
@@ -2582,6 +2787,10 @@ function stopEngine() {
     engineNode = null;
 }
 
+/**
+ * Adjusts oscillator frequencies, filter cutoff, and master gain to reflect the current throttle power.
+ * @param {number} power - Normalised throttle value in [0, 1].
+ */
 function updateEngine(power) {
     if (!engineNode) return;
     if (isMuted) return;
@@ -2620,6 +2829,7 @@ function updateEngine(power) {
     });
 }
 
+/** Procedurally generates the entire island environment: terrain, sea, city buildings, parks, trees, roads, and beach. */
 function createEnvironment() {
     const roadWidth = 18;
     const blockSize = 32;
@@ -3396,6 +3606,13 @@ function createEnvironment() {
     }
 }
 
+/**
+ * Converts an array of per-angle radii into a THREE.Shape polygon (used for terrain outlines).
+ * @param {number[]} radii - Array of radius values, one per equal angular step.
+ * @param {number} [extra=0] - Uniform expansion added to every radius.
+ * @param {boolean} [checkBeach=false] - When true, applies extra expansion only to beach-sector angles.
+ * @returns {THREE.Shape}
+ */
 function generateShapeFromRadii(radii, extra = 0, checkBeach = false) {
     const shape = new THREE.Shape();
     radii.forEach((r, i) => {
@@ -3408,12 +3625,24 @@ function generateShapeFromRadii(radii, extra = 0, checkBeach = false) {
     return shape;
 }
 
+/**
+ * Spawns a glowing extra-life heart collectible at the given world position.
+ * @param {THREE.Vector3} pos
+ */
 function spawnLife(pos) {
     const heart = new THREE.Group();
     heart.add(new THREE.Mesh(new THREE.SphereGeometry(1.2, 8, 8), new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x00ff00, emissiveIntensity: 0.6 })));
     heart.position.copy(pos); heart.position.y += 2.5; scene.add(heart); extraLives.push(heart);
 }
 
+/**
+ * Returns true if the given XYZ world position overlaps with any building obstacle footprint.
+ * @param {number} x
+ * @param {number} y
+ * @param {number} z
+ * @param {number} [marginXZ=0.8] - Horizontal expansion applied to each building's bounding box.
+ * @returns {boolean}
+ */
 function isSpawnInsideBuilding(x, y, z, marginXZ = 0.8) {
     for (let i = 0; i < obstacles.length; i++) {
         const obs = obstacles[i];
@@ -3429,6 +3658,16 @@ function isSpawnInsideBuilding(x, y, z, marginXZ = 0.8) {
     return false;
 }
 
+/**
+ * Finds a random world position that is clear of buildings and (optionally) over land.
+ * @param {number} minDist - Minimum distance from origin.
+ * @param {number} maxDist - Maximum distance from origin.
+ * @param {number} minY - Minimum altitude.
+ * @param {number} maxY - Maximum altitude.
+ * @param {number} [marginXZ=0.8] - Clearance margin used by isSpawnInsideBuilding.
+ * @param {boolean} [requireLand=true] - If true, only accepts positions over land.
+ * @returns {THREE.Vector3|null} A valid position, or null if none was found within the attempt limit.
+ */
 function findClearSpawnPosition(minDist, maxDist, minY, maxY, marginXZ = 0.8, requireLand = true) {
     const tries = 160;
     for (let i = 0; i < tries; i++) {
@@ -3444,6 +3683,7 @@ function findClearSpawnPosition(minDist, maxDist, minY, maxY, marginXZ = 0.8, re
     return null;
 }
 
+/** Removes any existing entities and re-spawns targets, powerups, cargo crates, and extra lives for the current level. */
 function spawnEntities() {
     [...targets, ...powerups, ...crates, ...extraLives].forEach(e => scene.remove(e));
     targets = []; powerups = []; crates = []; extraLives = [];
@@ -3496,11 +3736,13 @@ function spawnEntities() {
     }
 }
 
+/** Removes all active threat objects from the scene and resets the threats array. */
 function clearThreats() {
     threats.forEach(t => scene.remove(t));
     threats = [];
 }
 
+/** Spawns enemy threat drones at randomised positions around the island (only when the threat system option is enabled). */
 function spawnThreats() {
     clearThreats();
     if (!optThreatSystem) return;
@@ -3542,6 +3784,11 @@ function spawnThreats() {
     }
 }
 
+/**
+ * Constructs the player drone Three.js group for the given design, attaches rotors, lights,
+ * and a velocity vector, then adds it to the scene.
+ * @param {number} [designId=0] - Index of the drone visual design to build.
+ */
 function createDrone(designId = 0) {
     const design = Math.max(0, Math.min(SECRET_DELOREAN_DESIGN, designId | 0));
     drone = new THREE.Group();
@@ -3934,6 +4181,7 @@ function createDrone(designId = 0) {
     droneLocalMinY = bbox.min.y - drone.position.y;
 }
 
+/** Registers all touch event listeners for the dual on-screen joysticks and swipe-based Konami input. */
 function setupControls() {
     const containers = [{ el: document.getElementById('left-joystick'), ref: input.left }, { el: document.getElementById('right-joystick'), ref: input.right }];
     containers.forEach(({ el, ref }) => {
@@ -4027,6 +4275,7 @@ function setupControls() {
     window.addEventListener('touchcancel', clearTouch);
 }
 
+/** Reads held keyboard keys and converts them into normalised joystick axis values. */
 function updateKeyboardInput() {
     const isTouchActive = activeTouches.size > 0;
     const oldLeftY = input.left.y, oldLeftX = input.left.x;
@@ -4045,7 +4294,9 @@ function updateKeyboardInput() {
     }
 }
 
+/** Cancels an active Return-to-Home sequence and updates the HUD. */
 function cancelRTH() { if(isRTH) { isRTH = false; updateHUDStyles(); } }
+/** Cancels an active auto-landing sequence and updates the HUD. */
 function cancelAutoLanding() {
     if (!isAutoLanding) return;
     isAutoLanding = false;
@@ -4054,6 +4305,7 @@ function cancelAutoLanding() {
     updateLandingUI();
 }
 
+/** Initiates an emergency water-ditch sequence: cuts RTH/auto-land, zeroes velocity, and splashes particles at the ocean surface. */
 function triggerWaterDitch() {
     if (isWaterDitching) return;
     isWaterDitching = true;
@@ -4071,6 +4323,7 @@ function triggerWaterDitch() {
     updateLandingUI();
 }
 
+/** Begins the automatic landing sequence, which guides the drone to the ground below. */
 function initiateAutoLanding() {
     if (!drone || gameState !== 'PLAYING' || isLanded || isWaterDitching) return;
     cancelRTH();
@@ -4080,6 +4333,7 @@ function initiateAutoLanding() {
     updateLandingUI();
 }
 
+/** Begins Return-to-Home: climbs to safe altitude then navigates back to the spawn plaza. Skips the climb if already near home. */
 function initiateRTH() {
     cancelAutoLanding();
     isRTH = true;
@@ -4091,6 +4345,7 @@ function initiateRTH() {
     updateHUDStyles();
 }
 
+/** Lazily creates the battery-emergency parachute Three.js group (canopy + cords) and adds it to the scene. */
 function ensureBatteryChute() {
     if (batteryChute) return;
     batteryChute = new THREE.Group();
@@ -4118,6 +4373,7 @@ function ensureBatteryChute() {
     scene.add(batteryChute);
 }
 
+/** Tracks the drone position and applies a gentle sway animation to the deployed parachute. */
 function updateBatteryChuteVisual() {
     if (!batteryChute || !drone) return;
     batteryChute.visible = isBatteryEmergency && batteryChuteDeployed;
@@ -4173,6 +4429,7 @@ function updateBatteryChuteVisual() {
     }
 }
 
+/** Clears all battery-emergency flags and hides the parachute visual. */
 function resetBatteryEmergencyState() {
     isBatteryEmergency = false;
     batteryEmergencyTimer = 0;
@@ -4181,6 +4438,7 @@ function resetBatteryEmergencyState() {
     if (batteryChute) batteryChute.visible = false;
 }
 
+/** Triggers the battery-failure emergency: deploys the parachute, drains battery to zero, and cancels all autonomous flight modes. */
 function initiateBatteryEmergency() {
     if (isBatteryEmergency || awaitingLifeSacrifice || isWaterDitching) return;
     ensureBatteryChute();
@@ -4197,6 +4455,7 @@ function initiateBatteryEmergency() {
     updateHUDStyles();
 }
 
+/** Deducts a life after a battery failure; respawns the drone at the home position if lives remain, otherwise ends the game. */
 function sacrificeLifeAfterBatteryFail() {
     if (!awaitingLifeSacrifice) return;
     awaitingLifeSacrifice = false;
@@ -4225,6 +4484,11 @@ function sacrificeLifeAfterBatteryFail() {
     endGame('POWER EXHAUSTED');
 }
 
+/**
+ * Handles a fatal drone collision: plays explosion SFX, spawns particles, flashes the screen red,
+ * deducts a life, and either respawns or ends the game.
+ * @param {string} reason - Human-readable reason shown on the game-over screen.
+ */
 function handleImpact(reason) {
     playSfx('exp'); createParticles(drone.position, 0xff9900, 60); cancelRTH();
     cancelAutoLanding();
@@ -4236,8 +4500,10 @@ function handleImpact(reason) {
     if (lives > 0) { drone.position.set(0, 15, 0); drone.velocity.set(0, 0, 0); drone.rotation.set(0, 0, 0); drone.quaternion.identity(); droneYaw = 0; rotorSpool = 0; battery = 100; } else endGame(reason);
 }
 
+/** Renders the lives display as a row of red indicator dots. */
 function updateLivesUI() { const display = document.getElementById('lives-display'); if (display) display.innerHTML = '<div class="w-3 h-3 bg-red-600 rounded-full border border-white/20 shadow-[0_0_8px_red]"></div>'.repeat(Math.max(0, lives)); }
 
+/** Resets all game variables, configures day/night lighting, spawns entities and threats, and starts the engine audio. */
 function startGame() {
     gameState = 'PLAYING'; score = 0; level = 1; battery = 100; signal = 100; lives = CONFIG.INITIAL_LIVES; isRTH = false;
     isLanded = false; landingType = 'GROUND'; landingY = LANDING_GROUND_Y;
@@ -4265,6 +4531,7 @@ function startGame() {
     startEngine(); updateHUDStyles();
 }
 
+/** Stops the engine, clears threats, resets all in-flight state, and returns to the main menu screen. */
 function abortToMenu() {
     gameState = 'MENU'; isRTH = false; stopEngine();
     isLanded = false; landingType = 'GROUND'; landingY = LANDING_GROUND_Y;
@@ -4285,6 +4552,11 @@ function abortToMenu() {
     updateLandingUI();
 }
 
+/**
+ * Main per-frame drone physics and game-logic update. Handles input, thrust, wind,
+ * collision detection, battery/heat/signal drain, entity collection, threats, and level progression.
+ * @param {number} delta - Seconds elapsed since the last frame.
+ */
 function updateDrone(delta) {
     if (gameState !== 'PLAYING') return;
     
@@ -4974,6 +5246,12 @@ function updateDrone(delta) {
     if (_elScoreDisplay) _elScoreDisplay.innerText = score.toString().padStart(4, '0');
 }
 
+/**
+ * Spawns an explosion-style particle burst at a world position.
+ * @param {THREE.Vector3} pos - Spawn origin.
+ * @param {number} color - Hex colour for the particles.
+ * @param {number} [count=40] - Number of particles to emit.
+ */
 function createParticles(pos, color, count = 40) {
     for (let i = 0; i < count; i++) {
         const p = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.4, 0.4), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 1 }));
@@ -4982,6 +5260,7 @@ function createParticles(pos, color, count = 40) {
     }
 }
 
+/** Main render loop: updates drone physics, cloud and Heaven animations, particles, entity rotations, minimap, and renders the frame. */
 function animate() {
     requestAnimationFrame(animate); const delta = clock.getDelta(); updateDrone(delta);
     updateRegularCloudLayer(delta);
@@ -4995,8 +5274,10 @@ function animate() {
     renderer.render(scene, camera);
 }
 
-// Pre-render the static parts of the minimap (island, rings, grid) to an
-// offscreen canvas once. drawMinimap() then stamps it with a single drawImage.
+/**
+ * Renders the static island outline, grid, and rings to an off-screen canvas once.
+ * drawMinimap() stamps this cached image each frame to avoid redrawing unchanging geometry.
+ */
 function buildMinimapBgCanvas() {
     const size = 130, ctr = size / 2;
     const scale = size / (CONFIG.MAX_SIGNAL_DIST * 2.1);
@@ -5036,6 +5317,7 @@ function buildMinimapBgCanvas() {
     }); ctx.closePath(); ctx.fill();
 }
 
+/** Draws the minimap each frame: stamps the pre-baked background then overlays the drone, targets, threats, and radar-ping ring. */
 function drawMinimap() {
     const canvas = _elMinimapCanvas || document.getElementById('minimap-canvas');
     const ctx = canvas.getContext('2d');
@@ -5131,6 +5413,11 @@ function drawMinimap() {
     }
 }
 
+/**
+ * Ends the current game session: awards module points on success, stops the engine,
+ * clears threats, and displays the result screen.
+ * @param {string} reason - Result message shown to the player (e.g. 'MISSION COMPLETE' or a failure cause).
+ */
 function endGame(reason) {
     if (gameState === 'GAMEOVER') return; gameState = 'GAMEOVER';
     resetBatteryEmergencyState();
@@ -5153,6 +5440,7 @@ function endGame(reason) {
     document.getElementById('final-score').innerText = `SCORE: ${score.toString().padStart(4, '0')}`; document.getElementById('game-over').classList.remove('hidden');
 }
 
+/** Updates the Three.js camera aspect ratio and renderer size to match the new window dimensions. */
 function onWindowResize() { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); }
 
 window.onload = init;
